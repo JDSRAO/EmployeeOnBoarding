@@ -1,0 +1,39 @@
+# .NET
+bin/
+obj/
+publish/
+*.user
+*.suo
+.vs/
+TestResults/
+
+# Node and Next.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+appsettings.Local.json
+*.pfx
+*.publishsettings
+
+# SQL
+*.dacpac
+*.bacpac
+*.mdf
+*.ldf
+
+# Tooling
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
+
+# Bicep
+infra/main.json

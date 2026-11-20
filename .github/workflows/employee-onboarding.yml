@@ -1,0 +1,315 @@
+name: Employee Onboarding
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: employee-onboarding-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_VERSION: 10.0.x
+  NODE_VERSION: 22.x
+  AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP || 'rg-employee-onboarding-dev' }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'eastus2' }}
+  ENVIRONMENT_NAME: ${{ vars.ENVIRONMENT_NAME || 'dev' }}
+  DEPLOYMENT_NAME: employee-onboarding-infra
+
+jobs:
+  validate:
+    name: Build and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore backend
+        run: dotnet restore backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj
+
+      - name: Build API
+        run: dotnet build backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj -c Release --no-restore
+
+      - name: Restore and build worker
+        run: |
+          dotnet restore backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj
+          dotnet build backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj -c Release --no-restore
+
+      - name: Build database project
+        run: dotnet build backend/database/EmployeeOnBoarding.Database/EmployeeOnBoarding.Database.sqlproj -c Release
+
+      - name: Publish API
+        run: dotnet publish backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj -c Release -o publish/api /p:UseAppHost=false
+
+      - name: Publish worker
+        run: dotnet publish backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj -c Release -o publish/worker /p:UseAppHost=false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: api-app
+          path: publish/api
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: worker-app
+          path: publish/worker
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: database-dacpac
+          path: backend/database/EmployeeOnBoarding.Database/bin/Release/EmployeeOnBoarding.Database.dacpac
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check frontend
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:5215
+
+  infrastructure:
+    name: Deploy infrastructure
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      api_url: ${{ steps.deploy.outputs.api_url }}
+      api_app_name: ${{ steps.deploy.outputs.api_app_name }}
+      worker_app_name: ${{ steps.deploy.outputs.worker_app_name }}
+      sql_server_name: ${{ steps.deploy.outputs.sql_server_name }}
+      static_web_app_name: ${{ steps.deploy.outputs.static_web_app_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure resource group exists
+        run: |
+          az group create \
+            --name "$AZURE_RESOURCE_GROUP" \
+            --location "$AZURE_LOCATION" \
+            --output none
+
+      - name: Deploy Bicep
+        id: deploy
+        env:
+          SQL_ADMIN_PASSWORD: ${{ secrets.SQL_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          az deployment group create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$DEPLOYMENT_NAME" \
+            --template-file infra/main.bicep \
+            --parameters \
+              environmentName="$ENVIRONMENT_NAME" \
+              location="$AZURE_LOCATION" \
+              sqlAdminPassword="$SQL_ADMIN_PASSWORD" \
+              allowAllIpAddresses=false \
+            --output none
+
+          api_url=$(az deployment group show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$DEPLOYMENT_NAME" \
+            --query properties.outputs.apiUrl.value -o tsv)
+          api_app_name=$(az deployment group show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$DEPLOYMENT_NAME" \
+            --query properties.outputs.apiAppName.value -o tsv)
+          worker_app_name=$(az deployment group show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$DEPLOYMENT_NAME" \
+            --query properties.outputs.workerAppName.value -o tsv)
+          sql_server_name=$(az deployment group show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$DEPLOYMENT_NAME" \
+            --query properties.outputs.sqlServerName.value -o tsv)
+          static_web_app_name=$(az deployment group show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$DEPLOYMENT_NAME" \
+            --query properties.outputs.staticWebAppName.value -o tsv)
+
+          {
+            echo "api_url=$api_url"
+            echo "api_app_name=$api_app_name"
+            echo "worker_app_name=$worker_app_name"
+            echo "sql_server_name=$sql_server_name"
+            echo "static_web_app_name=$static_web_app_name"
+          } >> "$GITHUB_OUTPUT"
+
+  backend:
+    name: Deploy API, worker and database
+    if: github.event_name != 'pull_request'
+    needs: infrastructure
+    runs-on: ubuntu-latest
+    env:
+      SQL_ADMIN_LOGIN: sqladmin
+      SQL_ADMIN_PASSWORD: ${{ secrets.SQL_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: api-app
+          path: artifacts/api
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: worker-app
+          path: artifacts/worker
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: database-dacpac
+          path: artifacts/database
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Package web apps
+        run: |
+          cd artifacts/api && zip -qr ../api.zip .
+          cd ../worker && zip -qr ../worker.zip .
+
+      - name: Install SqlPackage
+        run: |
+          dotnet tool install --global microsoft.sqlpackage
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Open SQL firewall for the GitHub runner
+        env:
+          SQL_SERVER_NAME: ${{ needs.infrastructure.outputs.sql_server_name }}
+        run: |
+          RUNNER_IP=$(curl -fsS https://api.ipify.org)
+          az sql server firewall-rule create \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --server "$SQL_SERVER_NAME" \
+            --name github-runner-deploy \
+            --start-ip-address "$RUNNER_IP" \
+            --end-ip-address "$RUNNER_IP" \
+            --output none
+
+      - name: Deploy database schema
+        env:
+          SQL_SERVER_NAME: ${{ needs.infrastructure.outputs.sql_server_name }}
+        run: |
+          SQLPACKAGE="$HOME/.dotnet/tools/sqlpackage"
+          CONNECTION_STRING="Server=tcp:$SQL_SERVER_NAME.database.windows.net,1433;Initial Catalog=EmployeeOnBoarding;Persist Security Info=False;User ID=$SQL_ADMIN_LOGIN;Password=$SQL_ADMIN_PASSWORD;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;"
+          "$SQLPACKAGE" \
+            /Action:Publish \
+            /SourceFile:artifacts/database/EmployeeOnBoarding.Database.dacpac \
+            "/TargetConnectionString:$CONNECTION_STRING" \
+            /p:BlockOnPossibleDataLoss=false
+
+      - name: Deploy API
+        run: |
+          az webapp deploy \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "${{ needs.infrastructure.outputs.api_app_name }}" \
+            --src-path artifacts/api.zip \
+            --type zip
+
+      - name: Deploy worker
+        run: |
+          az webapp deploy \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "${{ needs.infrastructure.outputs.worker_app_name }}" \
+            --src-path artifacts/worker.zip \
+            --type zip
+
+      - name: Smoke test API
+        run: |
+          curl --fail --retry 6 --retry-delay 10 --retry-all-errors \
+            "${{ needs.infrastructure.outputs.api_url }}/health"
+          curl --fail --retry 12 --retry-delay 10 --retry-all-errors \
+            "${{ needs.infrastructure.outputs.api_url }}/api/employees"
+
+      - name: Remove SQL firewall rule
+        if: always()
+        env:
+          SQL_SERVER_NAME: ${{ needs.infrastructure.outputs.sql_server_name }}
+        run: |
+          az sql server firewall-rule delete \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --server "$SQL_SERVER_NAME" \
+            --name github-runner-deploy \
+            --yes \
+            --output none || true
+
+  frontend:
+    name: Deploy frontend to Static Web Apps
+    if: github.event_name != 'pull_request'
+    needs: infrastructure
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get Static Web Apps deployment token
+        env:
+          STATIC_WEB_APP_NAME: ${{ needs.infrastructure.outputs.static_web_app_name }}
+        run: |
+          TOKEN=$(az staticwebapp secrets list \
+            --name "$STATIC_WEB_APP_NAME" \
+            --query properties.apiKey \
+            -o tsv)
+          echo "::add-mask::$TOKEN"
+          echo "SWA_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Build and deploy frontend
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ env.SWA_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: frontend
+          api_location: ""
+          output_location: out
+          app_build_command: npm run build
+          is_static_export: true
+        env:
+          IS_STATIC_EXPORT: "true"
+          NEXT_PUBLIC_API_BASE_URL: ${{ needs.infrastructure.outputs.api_url }}
+          NEXT_PUBLIC_APPINSIGHTS_CONNECTION_STRING: ${{ vars.NEXT_PUBLIC_APPINSIGHTS_CONNECTION_STRING }}

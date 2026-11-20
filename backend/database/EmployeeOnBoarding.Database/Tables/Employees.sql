@@ -1,0 +1,17 @@
+CREATE TABLE [dbo].[Employees]
+(
+    [Id] UNIQUEIDENTIFIER NOT NULL,
+    [Name] NVARCHAR(150) NOT NULL,
+    [Email] NVARCHAR(255) NOT NULL,
+    [Department] NVARCHAR(100) NOT NULL,
+    [ProfilePictureUrl] NVARCHAR(2048) NULL,
+    [CreatedAtUtc] DATETIMEOFFSET(0) NOT NULL CONSTRAINT [DF_Employees_CreatedAtUtc] DEFAULT SYSUTCDATETIME(),
+    [UpdatedAtUtc] DATETIMEOFFSET(0) NOT NULL CONSTRAINT [DF_Employees_UpdatedAtUtc] DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT [PK_Employees] PRIMARY KEY CLUSTERED ([Id]),
+    CONSTRAINT [UQ_Employees_Email] UNIQUE NONCLUSTERED ([Email])
+);
+GO
+
+CREATE NONCLUSTERED INDEX [IX_Employees_Name]
+    ON [dbo].[Employees] ([Name]);
+GO

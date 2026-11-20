@@ -1,0 +1,252 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  azureServiceConnection: sc-employee-onboarding
+  resourceGroup: rg-employee-onboarding-dev
+  location: eastus2
+  environmentName: dev
+  deploymentName: employee-onboarding-infra
+  dotnetVersion: 10.0.x
+  nodeVersion: 22.x
+  sqlAdminLogin: sqladmin
+
+stages:
+  - stage: Build
+    displayName: Build and validate
+    jobs:
+      - job: Backend
+        displayName: Backend and database
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: UseDotNet@2
+            displayName: Use .NET 10
+            inputs:
+              packageType: sdk
+              version: $(dotnetVersion)
+
+          - script: |
+              dotnet restore backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj
+              dotnet build backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj -c Release --no-restore
+              dotnet restore backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj
+              dotnet build backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj -c Release --no-restore
+              dotnet build backend/database/EmployeeOnBoarding.Database/EmployeeOnBoarding.Database.sqlproj -c Release
+            displayName: Restore and build
+
+          - script: |
+              dotnet publish backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj -c Release -o $(Build.ArtifactStagingDirectory)/api /p:UseAppHost=false
+              dotnet publish backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj -c Release -o $(Build.ArtifactStagingDirectory)/worker /p:UseAppHost=false
+              cd $(Build.ArtifactStagingDirectory)/api && zip -qr ../api.zip .
+              cd $(Build.ArtifactStagingDirectory)/worker && zip -qr ../worker.zip .
+              mkdir -p $(Build.ArtifactStagingDirectory)/database
+              cp backend/database/EmployeeOnBoarding.Database/bin/Release/EmployeeOnBoarding.Database.dacpac $(Build.ArtifactStagingDirectory)/database/
+            displayName: Publish artifacts
+
+          - task: PublishPipelineArtifact@1
+            displayName: Upload backend artifacts
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)
+              artifact: backend-drop
+
+      - job: Frontend
+        displayName: Frontend
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: NodeTool@0
+            displayName: Use Node.js
+            inputs:
+              versionSpec: $(nodeVersion)
+
+          - script: npm ci
+            workingDirectory: frontend
+            displayName: Install dependencies
+
+          - script: npm run typecheck
+            workingDirectory: frontend
+            displayName: Type check
+
+          - script: npm run build
+            workingDirectory: frontend
+            displayName: Build
+            env:
+              NEXT_PUBLIC_API_BASE_URL: http://localhost:5215
+
+  - stage: Deploy
+    displayName: Deploy to Azure
+    dependsOn: Build
+    condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+    jobs:
+      - job: Deploy
+        displayName: Deploy application
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
+
+          - task: UseDotNet@2
+            displayName: Use .NET 10
+            inputs:
+              packageType: sdk
+              version: $(dotnetVersion)
+
+          - task: DownloadPipelineArtifact@2
+            displayName: Download backend artifacts
+            inputs:
+              artifact: backend-drop
+              path: $(Pipeline.Workspace)/drop
+
+          - task: AzureCLI@2
+            displayName: Deploy infrastructure
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                az bicep install
+                az group create --name "$(resourceGroup)" --location "$(location)" --output none
+
+                az deployment group create \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(deploymentName)" \
+                  --template-file infra/main.bicep \
+                  --parameters \
+                    environmentName="$(environmentName)" \
+                    location="$(location)" \
+                    sqlAdminPassword="$SQL_ADMIN_PASSWORD" \
+                    allowAllIpAddresses=false \
+                  --output none
+
+                az deployment group show \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(deploymentName)" \
+                  --query properties.outputs \
+                  -o json > "$(Pipeline.Workspace)/outputs.json"
+
+                apiUrl=$(cat "$(Pipeline.Workspace)/outputs.json" | jq -r '.apiUrl.value')
+                apiAppName=$(cat "$(Pipeline.Workspace)/outputs.json" | jq -r '.apiAppName.value')
+                workerAppName=$(cat "$(Pipeline.Workspace)/outputs.json" | jq -r '.workerAppName.value')
+                sqlServerName=$(cat "$(Pipeline.Workspace)/outputs.json" | jq -r '.sqlServerName.value')
+                staticWebAppName=$(cat "$(Pipeline.Workspace)/outputs.json" | jq -r '.staticWebAppName.value')
+                appInsightsName=$(cat "$(Pipeline.Workspace)/outputs.json" | jq -r '.applicationInsightsName.value')
+                appInsightsConnectionString=$(az monitor app-insights component show \
+                  --app "$appInsightsName" \
+                  --resource-group "$(resourceGroup)" \
+                  --query connectionString \
+                  -o tsv)
+
+                echo "##vso[task.setvariable variable=apiUrl]$apiUrl"
+                echo "##vso[task.setvariable variable=apiAppName]$apiAppName"
+                echo "##vso[task.setvariable variable=workerAppName]$workerAppName"
+                echo "##vso[task.setvariable variable=sqlServerName]$sqlServerName"
+                echo "##vso[task.setvariable variable=staticWebAppName]$staticWebAppName"
+                echo "##vso[task.setvariable variable=appInsightsBrowserConnectionString;issecret=true]$appInsightsConnectionString"
+            env:
+              SQL_ADMIN_PASSWORD: $(sqlAdminPassword)
+
+          - task: AzureCLI@2
+            displayName: Deploy database schema
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                export PATH="$PATH:$HOME/.dotnet/tools"
+                dotnet tool install --global microsoft.sqlpackage
+
+                RUNNER_IP=$(curl -fsS https://api.ipify.org)
+                az sql server firewall-rule create \
+                  --resource-group "$(resourceGroup)" \
+                  --server "$(sqlServerName)" \
+                  --name ado-runner-deploy \
+                  --start-ip-address "$RUNNER_IP" \
+                  --end-ip-address "$RUNNER_IP" \
+                  --output none
+
+                cleanup() {
+                  az sql server firewall-rule delete \
+                    --resource-group "$(resourceGroup)" \
+                    --server "$(sqlServerName)" \
+                    --name ado-runner-deploy \
+                    --yes \
+                    --output none || true
+                }
+                trap cleanup EXIT
+
+                CONNECTION_STRING="Server=tcp:$(sqlServerName).database.windows.net,1433;Initial Catalog=EmployeeOnBoarding;Persist Security Info=False;User ID=$(sqlAdminLogin);Password=$SQL_ADMIN_PASSWORD;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=60;"
+                sqlpackage \
+                  /Action:Publish \
+                  /SourceFile:$(Pipeline.Workspace)/drop/database/EmployeeOnBoarding.Database.dacpac \
+                  "/TargetConnectionString:$CONNECTION_STRING" \
+                  /p:BlockOnPossibleDataLoss=false
+            env:
+              SQL_ADMIN_PASSWORD: $(sqlAdminPassword)
+
+          - task: AzureCLI@2
+            displayName: Deploy API
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az webapp deploy \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(apiAppName)" \
+                  --src-path "$(Pipeline.Workspace)/drop/api.zip" \
+                  --type zip
+
+          - task: AzureCLI@2
+            displayName: Deploy worker
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az webapp deploy \
+                  --resource-group "$(resourceGroup)" \
+                  --name "$(workerAppName)" \
+                  --src-path "$(Pipeline.Workspace)/drop/worker.zip" \
+                  --type zip
+
+          - script: |
+              curl --fail --retry 6 --retry-delay 10 --retry-all-errors "$(apiUrl)/health"
+              curl --fail --retry 12 --retry-delay 10 --retry-all-errors "$(apiUrl)/api/employees"
+            displayName: Smoke test API
+
+          - task: AzureCLI@2
+            name: getSwaToken
+            displayName: Get Static Web Apps deployment token
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                TOKEN=$(az staticwebapp secrets list \
+                  --name "$(staticWebAppName)" \
+                  --query properties.apiKey \
+                  -o tsv)
+                echo "##vso[task.setvariable variable=swaToken;issecret=true]$TOKEN"
+
+          - task: AzureStaticWebApp@0
+            displayName: Build and deploy frontend
+            inputs:
+              app_location: frontend
+              api_location: ""
+              output_location: out
+              app_build_command: npm run build
+              is_static_export: true
+              azure_static_web_apps_api_token: $(swaToken)
+            env:
+              IS_STATIC_EXPORT: "true"
+              NEXT_PUBLIC_API_BASE_URL: $(apiUrl)
+              NEXT_PUBLIC_APPINSIGHTS_CONNECTION_STRING: $(appInsightsBrowserConnectionString)

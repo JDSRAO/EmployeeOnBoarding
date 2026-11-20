@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/backend/" />
+  <Folder Name="/backend/database/">
+    <Project Path="backend/database/EmployeeOnBoarding.Database/EmployeeOnBoarding.Database.sqlproj" Type="42ea0dbd-9cf1-443e-919e-be9c484e4577" />
+  </Folder>
+  <Folder Name="/backend/src/">
+    <Project Path="backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj" />
+    <Project Path="backend/src/EmployeeOnBoarding.Contracts/EmployeeOnBoarding.Contracts.csproj" />
+    <Project Path="backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj" />
+  </Folder>
+</Solution>
