@@ -6,6 +6,7 @@
   <Folder Name="/backend/src/">
     <Project Path="backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj" />
     <Project Path="backend/src/EmployeeOnBoarding.Contracts/EmployeeOnBoarding.Contracts.csproj" />
+    <Project Path="backend/src/EmployeeOnBoarding.Functions/EmployeeOnBoarding.Functions.csproj" />
     <Project Path="backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj" />
   </Folder>
 </Solution>

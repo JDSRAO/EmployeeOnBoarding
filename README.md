@@ -62,6 +62,7 @@ EmployeeOnBoarding/
 │   └── workflows/
 │       └── employee-onboarding.yml
 ├── backend/
+│   ├── docker-compose.yml                   # Optional: API + SQL Server containers
 │   ├── database/
 │   │   └── EmployeeOnBoarding.Database/
 │   │       ├── Tables/
@@ -71,9 +72,10 @@ EmployeeOnBoarding/
 │   │       │   └── SeedData.sql
 │   │       └── EmployeeOnBoarding.Database.sqlproj
 │   └── src/
-│       ├── EmployeeOnBoarding.Api/
+│       ├── EmployeeOnBoarding.Api/          # Web API (+ Dockerfile)
 │       ├── EmployeeOnBoarding.Contracts/
-│       └── EmployeeOnBoarding.Worker/
+│       ├── EmployeeOnBoarding.Functions/    # Azure Functions notification listener
+│       └── EmployeeOnBoarding.Worker/       # Original App Service worker
 ├── docs/
 │   ├── architecture.md
 │   ├── azure-resource-mapping.md
