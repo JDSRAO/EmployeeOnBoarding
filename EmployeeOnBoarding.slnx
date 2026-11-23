@@ -8,4 +8,5 @@
     <Project Path="backend/src/EmployeeOnBoarding.Contracts/EmployeeOnBoarding.Contracts.csproj" />
     <Project Path="backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj" />
   </Folder>
+  <Project Path="EmployeeOnBoarding.Functions/EmployeeOnBoarding.Functions.csproj" Id="b44c2447-2146-48fe-b463-4b0f0de1e08f" />
 </Solution>
