@@ -1,0 +1,31 @@
+services:
+  api:
+    build:
+      context: ./backend/src
+      dockerfile: EmployeeOnBoarding.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      Cors__AllowedOrigins__0: ${CORS_ALLOWED_ORIGIN:-http://localhost:3000}
+    volumes:
+      - type: bind
+        source: ${APPDATA}/Microsoft/UserSecrets/employee-onboarding-local
+        target: /root/.microsoft/usersecrets/employee-onboarding-local
+        read_only: true
+    ports:
+      - "5215:8080"
+
+  worker:
+    build:
+      context: ./backend/src
+      dockerfile: EmployeeOnBoarding.Worker/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+    volumes:
+      - type: bind
+        source: ${APPDATA}/Microsoft/UserSecrets/employee-onboarding-local
+        target: /root/.microsoft/usersecrets/employee-onboarding-local
+        read_only: true
+    ports:
+      - "5129:8080"
