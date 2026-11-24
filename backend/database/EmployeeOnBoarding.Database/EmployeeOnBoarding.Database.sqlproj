@@ -5,10 +5,16 @@
     <Name>EmployeeOnBoarding.Database</Name>
     <DSP>Microsoft.Data.Tools.Schema.Sql.SqlAzureV12DatabaseSchemaProvider</DSP>
     <ModelCollation>1033, CI</ModelCollation>
-    <ProjectGuid>2D52E981-8EEB-4280-8E2B-3984007DAC75</ProjectGuid>
+    <ProjectGuid>{2077be1d-cbce-4038-f31c-4c422ce97d53}</ProjectGuid>
+    <TargetDatabaseSet>True</TargetDatabaseSet>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+    <TargetFrameworkProfile />
   </PropertyGroup>
   <ItemGroup>
     <Build Remove="Scripts\SeedData.sql" />
     <PostDeploy Include="Scripts\SeedData.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Scripts\" />
   </ItemGroup>
 </Project>
