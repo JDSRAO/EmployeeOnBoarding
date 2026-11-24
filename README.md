@@ -10,10 +10,10 @@ The goal is learning value, not production completeness. Every Azure service has
 - Stores name, email, department and a profile picture URL in Azure SQL Database.
 - Uploads profile pictures to a public-read Blob Storage container and stores only the URL in SQL.
 - Publishes an `EmployeeChangedEvent` to an Azure Service Bus queue whenever an employee is created or updated.
-- Runs a background worker that consumes the event and inserts a notification row into SQL.
+- Runs an Azure Function Service Bus trigger that consumes the event and inserts a notification row into SQL.
 - Shows a live notification feed so the asynchronous flow is visible in the UI.
-- Reads secrets from Azure Key Vault through App Service Key Vault references and managed identity.
-- Sends backend, worker and browser telemetry to Application Insights.
+- Reads secrets from Azure Key Vault through App Service and Function App Key Vault references and managed identity.
+- Sends backend, Functions and browser telemetry to Application Insights.
 
 ## Architecture
 
@@ -24,12 +24,12 @@ flowchart LR
     API -->|Dapper| SQL[(Azure SQL Database)]
     API -->|upload image| Blob[(Azure Blob Storage<br/>profile-pictures)]
     API -->|publish event| SB[[Azure Service Bus<br/>employee-events queue]]
-    Worker[Azure App Service<br/>.NET 10 background worker] -->|consume event| SB
-    Worker -->|insert notification| SQL
+    Function[Azure Functions<br/>.NET 10 isolated worker] -->|consume event| SB
+    Function -->|insert notification| SQL
     API -.->|managed identity| KV[Azure Key Vault]
-    Worker -.->|managed identity| KV
+    Function -.->|managed identity| KV
     API -.->|telemetry| AI[Application Insights]
-    Worker -.->|telemetry| AI
+    Function -.->|telemetry| AI
     SWA -.->|browser telemetry| AI
 ```
 
@@ -43,7 +43,7 @@ The frontend is exported to static HTML, CSS and JavaScript at build time, so Az
 | --- | --- |
 | Frontend | Next.js 16 static export, React 19, TypeScript, Application Insights browser SDK |
 | Backend | .NET 10 Web API, Dapper, Microsoft.Data.SqlClient |
-| Worker | .NET 10 hosted background service on App Service |
+| Notifications | .NET 10 Azure Functions isolated worker with a Service Bus trigger |
 | Database | Azure SQL Database, SSDT database project, database-first |
 | Messaging | Azure Service Bus Standard queue with duplicate detection |
 | Storage | Azure Blob Storage container with public blob read access |
@@ -73,7 +73,8 @@ EmployeeOnBoarding/
 │   └── src/
 │       ├── EmployeeOnBoarding.Api/
 │       ├── EmployeeOnBoarding.Contracts/
-│       └── EmployeeOnBoarding.Worker/
+│       └── EmployeeOnBoarding.Worker/ (legacy listener)
+├── EmployeeOnBoarding.Functions/
 ├── docs/
 │   ├── architecture.md
 │   ├── azure-resource-mapping.md
@@ -100,7 +101,8 @@ EmployeeOnBoarding/
 | Service | Role in this sample |
 | --- | --- |
 | Azure Static Web Apps | Hosts the Next.js frontend and connects to the API. |
-| Azure App Service | Hosts the .NET API and a separate always-on background worker on one Linux plan. |
+| Azure App Service | Hosts the .NET API on the shared Linux plan. |
+| Azure Functions | Runs the Service Bus-triggered notification processor on the shared Linux plan. |
 | Azure SQL Database | Stores employees and notifications using the SSDT schema. |
 | Azure Blob Storage | Stores profile images in the `profile-pictures` container. |
 | Azure Service Bus | Decouples employee writes from notification creation. |
@@ -117,7 +119,7 @@ EmployeeOnBoarding/
 | POST | `/api/employees` | Create an employee. Uses `multipart/form-data`. |
 | PUT | `/api/employees/{id}` | Update an employee. Uses `multipart/form-data`. |
 | DELETE | `/api/employees/{id}` | Delete an employee and their blob. |
-| GET | `/api/notifications?take=25` | Read notifications created by the worker. |
+| GET | `/api/notifications?take=25` | Read notifications created by the Function. |
 | GET | `/swagger` | Swagger UI in the running API. |
 
 Both create and update accept `name`, `email`, `department` and an optional `profilePicture` file. Supported images are JPEG, PNG and WebP up to 5 MB.
@@ -144,7 +146,7 @@ $password = Read-Host -AsSecureString "SQL administrator password (12+ character
 .\scripts\set-local-secrets.ps1 -GrantKeyVaultAccess
 
 dotnet run --project backend/src/EmployeeOnBoarding.Api --launch-profile http
-dotnet run --project backend/src/EmployeeOnBoarding.Worker --launch-profile http
+# In a separate terminal, from EmployeeOnBoarding.Functions, run: func start
 npm install --prefix frontend
 npm run dev --prefix frontend
 ```

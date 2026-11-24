@@ -3,7 +3,7 @@ param(
     [string]$ResourceGroup = 'rg-employee-onboarding-dev',
     [string]$DeploymentName = 'employee-onboarding-infra',
     [string]$ApiProject = (Join-Path $PSScriptRoot '..\backend\src\EmployeeOnBoarding.Api'),
-    [string]$WorkerProject = (Join-Path $PSScriptRoot '..\backend\src\EmployeeOnBoarding.Worker'),
+    [string]$FunctionsProject = (Join-Path $PSScriptRoot '..\EmployeeOnBoarding.Functions'),
     [string]$FrontendPath = (Join-Path $PSScriptRoot '..\frontend'),
     [string]$ApiBaseUrl = 'http://localhost:5215',
     [switch]$GrantKeyVaultAccess
@@ -53,13 +53,30 @@ $storageConnectionString = Get-KeyVaultSecret 'StorageConnectionString'
 $serviceBusConnectionString = Get-KeyVaultSecret 'ServiceBusConnectionString'
 $appInsightsConnectionString = Get-KeyVaultSecret 'ApplicationInsightsConnectionString'
 
-Write-Host 'Writing .NET user secrets...'
+Write-Host 'Writing .NET user secrets and local Functions settings...'
 dotnet user-secrets set 'ConnectionStrings:SqlDatabase' $sqlConnectionString --project $ApiProject | Out-Null
 dotnet user-secrets set 'ConnectionStrings:BlobStorage' $storageConnectionString --project $ApiProject | Out-Null
 dotnet user-secrets set 'ServiceBus:ConnectionString' $serviceBusConnectionString --project $ApiProject | Out-Null
 
-dotnet user-secrets set 'ConnectionStrings:SqlDatabase' $sqlConnectionString --project $WorkerProject | Out-Null
-dotnet user-secrets set 'ServiceBus:ConnectionString' $serviceBusConnectionString --project $WorkerProject | Out-Null
+$localSettingsPath = Join-Path $FunctionsProject 'local.settings.json'
+if (Test-Path $localSettingsPath) {
+    $functionSettings = Get-Content -Path $localSettingsPath -Raw | ConvertFrom-Json
+}
+else {
+    $functionSettings = [pscustomobject]@{
+        IsEncrypted = $false
+        Values = [pscustomobject]@{}
+    }
+}
+
+$functionValues = $functionSettings.Values
+$functionValues | Add-Member -NotePropertyName 'AzureWebJobsStorage' -NotePropertyValue $storageConnectionString -Force
+$functionValues | Add-Member -NotePropertyName 'FUNCTIONS_WORKER_RUNTIME' -NotePropertyValue 'dotnet-isolated' -Force
+$functionValues | Add-Member -NotePropertyName 'ConnectionStrings__SqlDatabase' -NotePropertyValue $sqlConnectionString -Force
+$functionValues | Add-Member -NotePropertyName 'ServiceBusConnection' -NotePropertyValue $serviceBusConnectionString -Force
+$functionValues | Add-Member -NotePropertyName 'ServiceBusQueueName' -NotePropertyValue $outputs.serviceBusQueueName.value -Force
+$functionValues | Add-Member -NotePropertyName 'APPLICATIONINSIGHTS_CONNECTION_STRING' -NotePropertyValue $appInsightsConnectionString -Force
+$functionSettings | ConvertTo-Json -Depth 10 | Set-Content -Path $localSettingsPath -Encoding utf8
 
 $frontendEnvironment = @(
     "NEXT_PUBLIC_API_BASE_URL=$ApiBaseUrl"

@@ -8,8 +8,8 @@ The Employee OnBoarding application gives People Operations a small directory fo
 2. The browser calls a .NET 10 API on Azure App Service.
 3. The API writes employee data to Azure SQL Database and images to Azure Blob Storage.
 4. The API publishes an event to Azure Service Bus.
-5. A second App Service worker consumes the event and writes a notification to Azure SQL Database.
-6. Both services load secrets from Azure Key Vault and emit telemetry to Application Insights.
+5. An Azure Functions Service Bus trigger consumes the event and writes a notification to Azure SQL Database.
+6. The API and Function App load secrets from Azure Key Vault and emit telemetry to Application Insights.
 
 ## 2. Logical architecture
 
@@ -25,7 +25,10 @@ flowchart TB
 
     subgraph AppService["Azure App Service (Linux B1 plan)"]
         API[EmployeeOnBoarding.Api<br/>.NET 10 Web API]
-        Worker[EmployeeOnBoarding.Worker<br/>.NET 10 background service]
+    end
+
+    subgraph Functions["Azure Functions (Linux B1 plan)"]
+        Function[EmployeeOnBoarding.Functions<br/>.NET 10 isolated worker]
     end
 
     subgraph Data["Managed data services"]
@@ -45,12 +48,12 @@ flowchart TB
     API -->|Dapper over TLS| SQL
     API -->|upload image| Blob
     API -->|publish event| SB
-    SB -->|deliver message| Worker
-    Worker -->|insert notification| SQL
+    SB -->|deliver message| Function
+    Function -->|insert notification| SQL
     API -.->|Key Vault reference via managed identity| KV
-    Worker -.->|Key Vault reference via managed identity| KV
+    Function -.->|Key Vault reference via managed identity| KV
     API -.->|traces, logs, dependencies| AI
-    Worker -.->|traces, logs| AI
+    Function -.->|traces, logs| AI
     Next -.->|browser page views| AI
     AI --> LA
 ```
@@ -66,7 +69,7 @@ sequenceDiagram
     participant Blob as Blob Storage
     participant SQL as SQL Database
     participant SB as Service Bus
-    participant Worker as Worker on App Service
+    participant Function as Functions isolated worker
     participant AI as Application Insights
 
     User->>UI: Submit employee form and optional image
@@ -82,10 +85,10 @@ sequenceDiagram
     API-->>UI: 201 Created or 200 OK
     API-->>AI: Dependency telemetry for Blob, SQL and Service Bus
 
-    SB->>Worker: Deliver message
-    Worker->>SQL: Insert notification if EventId is new
-    SQL-->>Worker: Notification inserted or duplicate skipped
-    Worker-->>AI: Trace and dependency telemetry
+    SB->>Function: Deliver message
+    Function->>SQL: Insert notification if EventId is new
+    SQL-->>Function: Notification inserted or duplicate skipped
+    Function-->>AI: Trace and dependency telemetry
     UI->>API: Poll GET /api/notifications every 5 seconds
     API->>SQL: Read notifications
     API-->>UI: Notification list
@@ -100,12 +103,12 @@ The API response does not wait for notification creation. That is the teaching p
 | Next.js frontend | Directory UI, forms, image preview, notification feed, browser telemetry | Static Web Apps gives a globally distributed frontend with a free tier and Git-based deployment. |
 | API | Validation, image upload, SQL persistence, event publication, notification read API | App Service hosts a standard ASP.NET Core app with minimal operational overhead. |
 | Contracts project | Shared `EmployeeChangedEvent` and queue defaults | Publisher and consumer share one versioned message shape. |
-| Worker | Service Bus processor, idempotent notification insert | A separate always-on process shows background processing and independent scaling. |
+| Azure Functions | Service Bus trigger, idempotent notification insert | A serverless function keeps message handling independent from API requests. |
 | SQL Database | Durable relational state for employees and notifications | Strong schema, uniqueness constraints and SSDT deployment fit the database-first requirement. |
 | Blob Storage | Profile image bytes | Binary content is cheaper and simpler to serve from object storage than from SQL. |
 | Service Bus | Durable queue for employee events | Buffers spikes, retries failures and decouples notification creation. |
 | Key Vault | Secret material | No connection strings in source control; App Service resolves Key Vault references with managed identity. |
-| Application Insights | Distributed telemetry | One place to inspect requests, dependencies, logs and failures across API, worker and browser. |
+| Application Insights | Distributed telemetry | One place to inspect requests, dependencies, logs and failures across API, Functions and browser. |
 
 ## 5. Azure service justification
 
@@ -115,7 +118,7 @@ The frontend is a statically exported Next.js application. Static Web Apps provi
 
 ### Azure App Service
 
-App Service is the simplest managed host for a .NET 10 Web API and a second always-on worker. Both apps share one Linux B1 plan, so the sample demonstrates two app services on one compute plan without extra infrastructure. System-assigned managed identities let both apps read Key Vault. Health checks and structured logs are available without custom tooling.
+App Service hosts the .NET 10 Web API. Azure Functions runs the isolated Service Bus consumer on the shared Linux B1 plan. Both applications use system-assigned managed identities to resolve Key Vault references; the API exposes a health check, while the Functions host provides trigger and invocation telemetry.
 
 ### Azure SQL Database
 
@@ -127,7 +130,7 @@ Profile pictures are unstructured binary data. Keeping bytes out of SQL keeps ro
 
 ### Azure Service Bus
 
-Service Bus provides durable messaging, at-least-once delivery, duplicate detection, retries and a dead-letter queue. The queue lets the API return quickly while a worker creates notifications. Duplicate detection plus a unique `EventId` in SQL makes the consumer idempotent, which is an important cloud-native lesson.
+Service Bus provides durable messaging, at-least-once delivery, duplicate detection, retries and a dead-letter queue. The queue lets the API return quickly while the Function creates notifications. Duplicate detection plus a unique `EventId` in SQL makes the consumer idempotent, which is an important cloud-native lesson.
 
 ### Azure Key Vault
 
@@ -137,11 +140,11 @@ All connection strings are stored in Key Vault. App Service app settings use Key
 @Microsoft.KeyVault(SecretUri=https://kv-eob-dev-xxxxxx.vault.azure.net/secrets/SqlConnectionString/)
 ```
 
-The API and worker use their system-assigned managed identities with the `Key Vault Secrets User` role. Nothing sensitive lives in the repository or in the Bicep parameter file.
+The API and Function App use their system-assigned managed identities with the `Key Vault Secrets User` role. Nothing sensitive lives in the repository or in the Bicep parameter file.
 
 ### Application Insights
 
-Application Insights is wired into the API, worker and browser. The trainer can show request latency, SQL and Blob dependencies, worker traces, exceptions and the live metrics stream. Log Analytics is provisioned as the workspace backing the Application Insights component, which also introduces the workspace-based model.
+Application Insights is wired into the API, Functions host and browser. The trainer can show request latency, SQL and Blob dependencies, function traces, exceptions and the live metrics stream. Log Analytics is provisioned as the workspace backing the Application Insights component, which also introduces the workspace-based model.
 
 ## 6. Security model
 
@@ -159,10 +162,10 @@ Production hardening would replace SQL administrator authentication with managed
 
 ## 7. Reliability and consistency
 
-- **At-least-once delivery:** Service Bus may deliver a message more than once. The worker uses `IF NOT EXISTS` on the unique `EventId` so duplicates are harmless.
+- **At-least-once delivery:** Service Bus may deliver a message more than once. The Function uses `IF NOT EXISTS` on the unique `EventId` so duplicates are harmless.
 - **Retries and dead-lettering:** The queue has a maximum delivery count of 5 and dead-letters expired messages. Failed messages can be inspected and replayed.
 - **Partial failure:** The API writes SQL and then publishes to Service Bus. A production system would use an outbox table to make those two operations atomic. This is a deliberate discussion point in the class.
-- **Health checks:** `GET /health` is configured as the App Service health check path on both apps.
+- **Health checks:** `GET /health` is configured for the API App Service. The Function App is monitored through Azure Functions host health and trigger telemetry.
 - **Observability:** Serilog emits structured logs; Application Insights captures the same operations as requests, dependencies and traces.
 
 ## 8. Scaling path
@@ -170,7 +173,7 @@ Production hardening would replace SQL administrator authentication with managed
 The sample runs one instance of each app. A discussion of scale can cover:
 
 - Static Web Apps already serves the frontend globally.
-- App Service can scale out manually or with autoscale rules; the worker can scale independently because it competes for Service Bus messages.
+- The API App Service can scale out manually or with autoscale rules; the Function App scales message processing independently through its Service Bus trigger.
 - Service Bus Standard supports competing consumers and dead-lettering.
 - SQL Basic is intentionally small; production would use a higher tier, zone redundancy and read scaling.
 - Blob Storage can front a CDN and private endpoints can replace public access.

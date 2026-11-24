@@ -43,10 +43,10 @@ jobs:
       - name: Build API
         run: dotnet build backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj -c Release --no-restore
 
-      - name: Restore and build worker
+      - name: Restore and build Functions app
         run: |
-          dotnet restore backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj
-          dotnet build backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj -c Release --no-restore
+          dotnet restore EmployeeOnBoarding.Functions/EmployeeOnBoarding.Functions.csproj
+          dotnet build EmployeeOnBoarding.Functions/EmployeeOnBoarding.Functions.csproj -c Release --no-restore
 
       - name: Build database project
         run: dotnet build backend/database/EmployeeOnBoarding.Database/EmployeeOnBoarding.Database.sqlproj -c Release
@@ -54,8 +54,8 @@ jobs:
       - name: Publish API
         run: dotnet publish backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj -c Release -o publish/api /p:UseAppHost=false
 
-      - name: Publish worker
-        run: dotnet publish backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj -c Release -o publish/worker /p:UseAppHost=false
+      - name: Publish Functions app
+        run: dotnet publish EmployeeOnBoarding.Functions/EmployeeOnBoarding.Functions.csproj -c Release -o publish/functions /p:UseAppHost=false
 
       - uses: actions/upload-artifact@v4
         with:
@@ -64,8 +64,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: worker-app
-          path: publish/worker
+          name: functions-app
+          path: publish/functions
 
       - uses: actions/upload-artifact@v4
         with:
@@ -189,8 +189,8 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: worker-app
-          path: artifacts/worker
+          name: functions-app
+          path: artifacts/functions
 
       - uses: actions/download-artifact@v4
         with:
@@ -206,7 +206,7 @@ jobs:
       - name: Package web apps
         run: |
           cd artifacts/api && zip -qr ../api.zip .
-          cd ../worker && zip -qr ../worker.zip .
+          cd ../functions && zip -qr ../functions.zip .
 
       - name: Install SqlPackage
         run: |
@@ -246,13 +246,12 @@ jobs:
             --src-path artifacts/api.zip \
             --type zip
 
-      - name: Deploy worker
+      - name: Deploy Functions app
         run: |
-          az webapp deploy \
+          az functionapp deployment source config-zip \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "${{ needs.infrastructure.outputs.worker_app_name }}" \
-            --src-path artifacts/worker.zip \
-            --type zip
+            --src artifacts/functions.zip
 
       - name: Smoke test API
         run: |

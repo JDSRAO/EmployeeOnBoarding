@@ -1,37 +1,43 @@
-# https://hub.docker.com/_/microsoft-dotnet
+# Stage 1: Build
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+
 WORKDIR /source
 
-# copy csproj and restore as distinct layers
-COPY EmployeeOnBoarding.Api/*.csproj EmployeeOnBoarding.Api/
-COPY EmployeeOnBoarding.Contracts/*.csproj EmployeeOnBoarding.Contracts/
-RUN dotnet restore EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj
+# Copy NuGet configuration and project files
+COPY NuGet.config ./
 
-# copy and build app and libraries
-COPY EmployeeOnBoarding.Api/ EmployeeOnBoarding.Api/
-COPY EmployeeOnBoarding.Contracts/ EmployeeOnBoarding.Contracts/
-WORKDIR /source/EmployeeOnBoarding.Api
-RUN dotnet build -c Release --self-contained
+COPY backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj backend/src/EmployeeOnBoarding.Api/
+COPY backend/src/EmployeeOnBoarding.Contracts/EmployeeOnBoarding.Contracts.csproj backend/src/EmployeeOnBoarding.Contracts/
 
-## test stage -- exposes optional entrypoint
-## target entrypoint with: docker build --target test
-#FROM build AS test
-#WORKDIR /source/tests
-#
-#COPY tests/*.csproj .
-#RUN dotnet restore tests.csproj
+# Restore dependencies
+RUN dotnet restore backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj
 
-#COPY tests/ .
-#RUN dotnet build --no-restore
+# Copy remaining source code
+COPY backend/src/ backend/src/
 
-ENTRYPOINT ["dotnet", "test", "--logger:trx", "--no-restore", "--no-build"]
+# Build API
+WORKDIR /source/backend/src/EmployeeOnBoarding.Api
 
+RUN dotnet build EmployeeOnBoarding.Api.csproj -c Release --no-restore
+
+# Stage 2: Publish
 FROM build AS publish
-RUN dotnet publish -c Release -r linux-x64 --self-contained true -p:GenerateRuntimeConfigurationFiles=false -p:GenerateDependencyFile=false --no-build -o /app
 
-# final stage/image
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
+RUN dotnet publish EmployeeOnBoarding.Api.csproj \
+    -c Release \
+    --no-build \
+    -o /app
+
+# Stage 3: Runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+
 WORKDIR /app
+
 COPY --from=publish /app .
+
+# Configure API listening port
+ENV ASPNETCORE_URLS=http://+:8080
+
 EXPOSE 8080
+
 ENTRYPOINT ["dotnet", "EmployeeOnBoarding.Api.dll"]

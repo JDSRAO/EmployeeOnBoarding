@@ -8,8 +8,8 @@ This document maps the logical application components to concrete Azure resource
 | --- | --- | --- | --- |
 | Frontend | `Microsoft.Web/staticSites` | `modules/staticWebApp.bicep` | Free, `eastus2`, HTTPS endpoint |
 | API host | `Microsoft.Web/sites` | `modules/webApp.bicep` | Linux, `.NET 10`, always on, system-assigned identity |
-| Worker host | `Microsoft.Web/sites` | `modules/webApp.bicep` | Linux, `.NET 10`, always on, system-assigned identity |
-| Compute plan | `Microsoft.Web/serverfarms` | `modules/appServicePlan.bicep` | Linux B1, one instance, shared by API and worker |
+| Notification host | `Microsoft.Web/sites` (`functionapp,linux`) | `modules/webApp.bicep` | Linux, .NET isolated, always on, system-assigned identity |
+| Compute plan | `Microsoft.Web/serverfarms` | `modules/appServicePlan.bicep` | Linux B1, one instance, shared by API and Function App |
 | Relational data | `Microsoft.Sql/servers` + `databases` | `modules/sqlDatabase.bicep` | SQL Database Basic, 2 GB |
 | Images | `Microsoft.Storage/storageAccounts` + blob service + container | `modules/storage.bicep` | Standard LRS, StorageV2, TLS 1.2, public blob read |
 | Messaging | `Microsoft.ServiceBus/namespaces` + queue | `modules/serviceBus.bicep` | Standard, queue `employee-events`, duplicate detection |
@@ -24,13 +24,13 @@ This document maps the logical application components to concrete Azure resource
 | `environmentName` | `dev` | Included in most names; 2–5 lower-case characters. |
 | `namePrefix` | `eob` | Included in most names; 2–5 lower-case characters. |
 | `location` | resource group location | Static Web Apps Free needs a supported region; `eastus2` is the sample default. |
-| `sqlAdminLogin` | `sqladmin` | SQL administrator login used by the API and worker connection strings. |
+| `sqlAdminLogin` | `sqladmin` | SQL administrator login used by the API and Function App connection strings. |
 | `sqlAdminPassword` | required, secure | Used for the SQL server and embedded in the Key Vault secret. |
 | `allowAllIpAddresses` | `false` | Training escape hatch for SQL network access. Keep false normally. |
 | `clientIpAddress` | empty | Single deployment/trainer IP allowed through SQL firewall. |
-| `appServicePlanSkuName` / `Tier` | `B1` / `Basic` | One shared plan for API and worker. |
+| `appServicePlanSkuName` / `Tier` | `B1` / `Basic` | One shared plan for API and Function App. |
 | `apiLinuxFxVersion` | `DOTNETCORE\|10.0` | Runtime stack for the API. |
-| `workerLinuxFxVersion` | `DOTNETCORE\|10.0` | Runtime stack for the worker. |
+| `workerLinuxFxVersion` | `DOTNET-ISOLATED\|10.0` | Runtime stack for the Functions isolated worker. |
 
 Resource names are deterministic within a subscription/resource group/environment. Redeploying the same parameters targets the same resources.
 
@@ -50,27 +50,29 @@ Resource names are deterministic within a subscription/resource group/environmen
 | `ASPNETCORE_ENVIRONMENT` | `Production` | Runtime environment. |
 | `WEBSITES_PORT` | `8080` | Port expected by App Service Linux. |
 
-### Worker app settings
+### Function App settings
 
 | App setting | Value source | Purpose |
 | --- | --- | --- |
+| `AzureWebJobsStorage` | Key Vault reference | Functions host storage. |
+| `FUNCTIONS_EXTENSION_VERSION` | `~4` | Azure Functions host version. |
+| `FUNCTIONS_WORKER_RUNTIME` | `dotnet-isolated` | Isolated .NET worker runtime. |
+| `WEBSITE_RUN_FROM_PACKAGE` | `1` | Run the deployed package. |
 | `ConnectionStrings__SqlDatabase` | Key Vault reference | Write notifications. |
-| `ServiceBus__ConnectionString` | Key Vault reference | Consume events. |
-| `ServiceBus__QueueName` | `employee-events` | Queue name. |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Key Vault reference | Worker telemetry. |
-| `ASPNETCORE_ENVIRONMENT` | `Production` | Runtime environment. |
-| `WEBSITES_PORT` | `8080` | Health endpoint port. |
+| `ServiceBusConnection` | Key Vault reference | Consume events. |
+| `ServiceBusQueueName` | `employee-events` | Queue name used by the trigger binding. |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Key Vault reference | Function telemetry. |
 
-The worker is a `Microsoft.NET.Sdk.Web` project even though it is not a public API. That gives it a small `/health` endpoint so App Service can verify the process is alive. Its real workload is the hosted `EmployeeEventsWorker`.
+The Functions project contains an isolated worker with a Service Bus trigger. The host manages message completion and retries; `host.json` sets two concurrent calls and five minutes of lock renewal.
 
 ## 4. Key Vault secrets
 
 | Secret name | Content | Consumers |
 | --- | --- | --- |
-| `SqlConnectionString` | SQL server FQDN, database, administrator login and password | API, worker |
-| `StorageConnectionString` | Storage account name and key | API |
-| `ServiceBusConnectionString` | Service Bus namespace connection string | API, worker |
-| `ApplicationInsightsConnectionString` | Application Insights connection string | API, worker, optional browser |
+| `SqlConnectionString` | SQL server FQDN, database, administrator login and password | API, Function App |
+| `StorageConnectionString` | Storage account name and key | API, Function App (`AzureWebJobsStorage`) |
+| `ServiceBusConnectionString` | Service Bus namespace connection string | API, Function App |
+| `ApplicationInsightsConnectionString` | Application Insights connection string | API, Function App, optional browser |
 
 The Key Vault uses `enableRbacAuthorization: true`. App Service identities receive the built-in role definition ID `4633458b-17de-408a-b874-0445c86b69e6` (`Key Vault Secrets User`).
 
@@ -79,9 +81,9 @@ The Key Vault uses `enableRbacAuthorization: true`. App Service identities recei
 ```mermaid
 flowchart LR
     API[API App Service<br/>system-assigned identity] -->|Key Vault Secrets User| KV[Key Vault]
-    Worker[Worker App Service<br/>system-assigned identity] -->|Key Vault Secrets User| KV
-    API -->|Key Vault reference resolution| Settings[App Service settings]
-    Worker -->|Key Vault reference resolution| Settings
+    Function[Function App<br/>system-assigned identity] -->|Key Vault Secrets User| KV
+    API -->|Key Vault reference resolution| Settings[App settings]
+    Function -->|Key Vault reference resolution| Settings
     Settings -->|ConnectionStrings__SqlDatabase| SQL[(SQL Database)]
     Settings -->|ServiceBus__ConnectionString| SB[Service Bus]
 ```
@@ -125,7 +127,7 @@ Service Bus namespace
     └── message body: EmployeeChangedEvent JSON
 ```
 
-The API sets `MessageId` to the event ID. The queue also uses duplicate detection. The worker writes the same event ID into a unique SQL column, giving two layers of idempotency.
+The API sets `MessageId` to the event ID. The queue also uses duplicate detection. The Function writes the same event ID into a unique SQL column, giving two layers of idempotency.
 
 ## 9. Deployment outputs
 
@@ -137,7 +139,7 @@ After Bicep deployment, these outputs are available for scripts and pipelines:
 | `apiUrl` | Set `NEXT_PUBLIC_API_BASE_URL`; run smoke tests. |
 | `swaggerUrl` | API exploration. |
 | `apiAppName` | `az webapp deploy` target. |
-| `workerAppName` | `az webapp deploy` target. |
+| `workerAppName` | `az functionapp deployment source config-zip` target (legacy output name). |
 | `staticWebAppName` | Retrieve the Static Web Apps deployment token. |
 | `keyVaultName` | Inspect secret metadata. |
 | `sqlServerName` | SQL connection and dacpac deployment. |
