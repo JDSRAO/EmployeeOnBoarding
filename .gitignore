@@ -37,3 +37,7 @@ Thumbs.db
 
 # Bicep
 infra/main.json
+
+
+*.dbmdl
+*.jfm
