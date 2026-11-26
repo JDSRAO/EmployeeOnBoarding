@@ -1,7 +1,7 @@
 <Solution>
   <Folder Name="/backend/" />
   <Folder Name="/backend/database/">
-    <Project Path="backend/database/EmployeeOnBoarding.Database/EmployeeOnBoarding.Database.sqlproj" Type="42ea0dbd-9cf1-443e-919e-be9c484e4577" />
+    <Project Path="backend/database/EmployeeOnBoarding.Database/EmployeeOnBoarding.Database.sqlproj" Type="42ea0dbd-9cf1-443e-919e-be9c484e4577" Id="2d52e981-8eeb-4280-8e2b-3984007dac75" />
   </Folder>
   <Folder Name="/backend/src/">
     <Project Path="backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj" />

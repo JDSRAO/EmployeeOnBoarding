@@ -27,7 +27,7 @@ RUN dotnet build -c Release --self-contained
 ENTRYPOINT ["dotnet", "test", "--logger:trx", "--no-restore", "--no-build"]
 
 FROM build AS publish
-RUN dotnet publish -c Release -r linux-x64 --self-contained true -p:GenerateRuntimeConfigurationFiles=false -p:GenerateDependencyFile=false --no-build -o /app
+RUN dotnet publish -c Release -r linux-x64 --self-contained true --no-build -o /app
 
 # final stage/image
 FROM mcr.microsoft.com/dotnet/aspnet:10.0

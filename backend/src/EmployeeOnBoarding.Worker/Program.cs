@@ -11,7 +11,14 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Services(services)
     .Enrich.FromLogContext(), writeToProviders: true);
 
-builder.Services.AddApplicationInsightsTelemetryWorkerService();
+var appInsightsConnectionString =
+    builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]
+    ?? builder.Configuration["ApplicationInsights:ConnectionString"];
+
+if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
+{
+    builder.Services.AddApplicationInsightsTelemetryWorkerService();
+}
 builder.Services.AddHealthChecks();
 
 var sqlConnectionString = builder.Configuration.GetConnectionString("SqlDatabase");

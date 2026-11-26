@@ -14,7 +14,14 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Services(services)
     .Enrich.FromLogContext(), writeToProviders: true);
 
-builder.Services.AddApplicationInsightsTelemetry();
+var appInsightsConnectionString =
+    builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]
+    ?? builder.Configuration["ApplicationInsights:ConnectionString"];
+
+if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
+{
+    builder.Services.AddApplicationInsightsTelemetry();
+}
 
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
@@ -42,31 +49,32 @@ builder.Services.Configure<ServiceBusOptions>(
 var sqlConnectionString = builder.Configuration.GetConnectionString("SqlDatabase");
 if (string.IsNullOrWhiteSpace(sqlConnectionString))
 {
-    throw new InvalidOperationException(
-        "ConnectionStrings:SqlDatabase is required. Configure it with user secrets or App Service settings.");
+    throw new InvalidOperationException("ConnectionStrings:SqlDatabase is required.");
 }
 
 var blobConnectionString = builder.Configuration.GetConnectionString("BlobStorage");
 if (string.IsNullOrWhiteSpace(blobConnectionString))
 {
-    throw new InvalidOperationException(
-        "ConnectionStrings:BlobStorage is required. Configure it with user secrets or App Service settings.");
+    throw new InvalidOperationException("ConnectionStrings:BlobStorage is required.");
 }
 
 var serviceBusConnectionString = builder.Configuration["ServiceBus:ConnectionString"];
 if (string.IsNullOrWhiteSpace(serviceBusConnectionString))
 {
-    throw new InvalidOperationException(
-        "ServiceBus:ConnectionString is required. Configure it with user secrets or App Service settings.");
+    throw new InvalidOperationException("ServiceBus:ConnectionString is required.");
 }
 
-builder.Services.AddSingleton<ISqlConnectionFactory>(new SqlConnectionFactory(sqlConnectionString));
+builder.Services.AddSingleton<ISqlConnectionFactory>(
+    new SqlConnectionFactory(sqlConnectionString));
+
 builder.Services.AddSingleton(new BlobServiceClient(blobConnectionString));
 builder.Services.AddSingleton(new ServiceBusClient(serviceBusConnectionString));
+
 builder.Services.AddSingleton(serviceProvider =>
 {
     var options = serviceProvider.GetRequiredService<IOptions<ServiceBusOptions>>().Value;
-    return serviceProvider.GetRequiredService<ServiceBusClient>().CreateSender(options.QueueName);
+    return serviceProvider.GetRequiredService<ServiceBusClient>()
+        .CreateSender(options.QueueName);
 });
 
 builder.Services.AddScoped<IEmployeeRepository, EmployeeRepository>();
