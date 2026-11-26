@@ -29,7 +29,7 @@ param storageContainerName string = 'profile-pictures'
 param appServicePlanSkuName string = 'B1'
 param appServicePlanSkuTier string = 'Basic'
 param apiLinuxFxVersion string = 'DOTNETCORE|10.0'
-param workerLinuxFxVersion string = 'DOTNETCORE|10.0'
+param workerLinuxFxVersion string = 'DOTNET-ISOLATED|10.0'
 
 @description('Allow all IPv4 addresses through the SQL firewall. Keep false outside isolated training subscriptions.')
 param allowAllIpAddresses bool = false
@@ -234,6 +234,7 @@ module workerApp 'modules/webApp.bicep' = {
   name: 'workerApp'
   dependsOn: [
     sqlConnectionSecret
+    storageConnectionSecret
     serviceBusConnectionSecret
     appInsightsConnectionSecret
   ]
@@ -243,14 +244,17 @@ module workerApp 'modules/webApp.bicep' = {
     tags: resourceTags
     serverFarmId: plan.outputs.id
     linuxFxVersion: workerLinuxFxVersion
-    healthCheckPath: '/health'
+    healthCheckPath: ''
     alwaysOn: true
+    kind: 'functionapp,linux'
     appSettings: {
-      ASPNETCORE_ENVIRONMENT: 'Production'
-      WEBSITES_PORT: '8080'
+      AzureWebJobsStorage: storageConnectionReference
+      FUNCTIONS_EXTENSION_VERSION: '~4'
+      FUNCTIONS_WORKER_RUNTIME: 'dotnet-isolated'
+      WEBSITE_RUN_FROM_PACKAGE: '1'
       ConnectionStrings__SqlDatabase: sqlConnectionReference
-      ServiceBus__ConnectionString: serviceBusConnectionReference
-      ServiceBus__QueueName: serviceBusQueueName
+      ServiceBusConnection: serviceBusConnectionReference
+      ServiceBusQueueName: serviceBusQueueName
       APPLICATIONINSIGHTS_CONNECTION_STRING: appInsightsConnectionReference
     }
   }

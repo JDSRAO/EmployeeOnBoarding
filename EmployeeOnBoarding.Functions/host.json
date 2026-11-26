@@ -1,0 +1,11 @@
+{
+    "version": "2.0",
+    "telemetryMode": "OpenTelemetry",
+    "extensions": {
+        "serviceBus": {
+            "autoCompleteMessages": true,
+            "maxConcurrentCalls": 2,
+            "maxAutoLockRenewalDuration": "00:05:00"
+        }
+    }
+}
