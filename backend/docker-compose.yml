@@ -1,0 +1,51 @@
+# Builds and runs the API container with a local SQL Server.
+# From the backend/ folder:
+#   copy .env.example .env   # then fill Blob + Service Bus values
+#   docker compose up --build
+#
+# The API also needs Azure Blob Storage and Service Bus connection strings
+# (same as local user-secrets). Put those in .env — do not commit real secrets.
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: eob-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-Your_strong_Password123}"
+    ports:
+      - "1433:1433"
+    volumes:
+      - eob-sqldata:/var/opt/mssql
+    healthcheck:
+      # TCP check — sqlcmd is not always present in the image
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/1433' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  backend:
+    build:
+      context: ./src
+      dockerfile: EmployeeOnBoarding.Api/Dockerfile
+    container_name: eob-api
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Docker
+      ASPNETCORE_URLS: http://+:8080
+      # Double-underscore maps to nested config keys in .NET
+      ConnectionStrings__SqlDatabase: "Server=sqlserver,1433;Database=EmployeeOnBoarding;User Id=sa;Password=${MSSQL_SA_PASSWORD:-Your_strong_Password123};TrustServerCertificate=True;Encrypt=False"
+      ConnectionStrings__BlobStorage: "${BLOB_STORAGE_CONNECTION_STRING}"
+      ServiceBus__ConnectionString: "${SERVICE_BUS_CONNECTION_STRING}"
+      ServiceBus__QueueName: "${SERVICE_BUS_QUEUE_NAME:-employee-events}"
+      Storage__ContainerName: "${STORAGE_CONTAINER_NAME:-profile-pictures}"
+      Cors__AllowedOrigins__0: "${CORS_ORIGIN:-http://localhost:3000}"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  eob-sqldata:

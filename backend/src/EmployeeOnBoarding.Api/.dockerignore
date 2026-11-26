@@ -3,4 +3,5 @@
 .git
 .vs
 .vscode
-README.md
+**/*.user
+**/*.md

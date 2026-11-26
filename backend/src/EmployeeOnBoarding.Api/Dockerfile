@@ -1,37 +1,33 @@
-# https://hub.docker.com/_/microsoft-dotnet
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
-WORKDIR /source
+# Build from backend/src (NOT from inside the Api folder):
+#   docker build -f EmployeeOnBoarding.Api/Dockerfile -t employee-onboarding-api .
+# Or via compose from backend/:
+#   docker compose up --build
 
-# copy csproj and restore as distinct layers
-COPY EmployeeOnBoarding.Api/*.csproj EmployeeOnBoarding.Api/
-COPY EmployeeOnBoarding.Contracts/*.csproj EmployeeOnBoarding.Contracts/
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+# Restore as a separate layer so dependency changes are cached.
+COPY EmployeeOnBoarding.Contracts/EmployeeOnBoarding.Contracts.csproj EmployeeOnBoarding.Contracts/
+COPY EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj EmployeeOnBoarding.Api/
 RUN dotnet restore EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj
 
-# copy and build app and libraries
-COPY EmployeeOnBoarding.Api/ EmployeeOnBoarding.Api/
 COPY EmployeeOnBoarding.Contracts/ EmployeeOnBoarding.Contracts/
-WORKDIR /source/EmployeeOnBoarding.Api
-RUN dotnet build -c Release --self-contained
+COPY EmployeeOnBoarding.Api/ EmployeeOnBoarding.Api/
 
-## test stage -- exposes optional entrypoint
-## target entrypoint with: docker build --target test
-#FROM build AS test
-#WORKDIR /source/tests
-#
-#COPY tests/*.csproj .
-#RUN dotnet restore tests.csproj
+# Framework-dependent publish matches the aspnet runtime image below.
+RUN dotnet publish EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj \
+    -c Release \
+    -o /app/publish \
+    /p:UseAppHost=false
 
-#COPY tests/ .
-#RUN dotnet build --no-restore
-
-ENTRYPOINT ["dotnet", "test", "--logger:trx", "--no-restore", "--no-build"]
-
-FROM build AS publish
-RUN dotnet publish -c Release -r linux-x64 --self-contained true -p:GenerateRuntimeConfigurationFiles=false -p:GenerateDependencyFile=false --no-build -o /app
-
-# final stage/image
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
-COPY --from=publish /app .
+
+ENV ASPNETCORE_URLS=http://+:8080
+ENV ASPNETCORE_ENVIRONMENT=Production
+
 EXPOSE 8080
+
+COPY --from=build /app/publish .
+
 ENTRYPOINT ["dotnet", "EmployeeOnBoarding.Api.dll"]

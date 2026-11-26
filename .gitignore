@@ -19,6 +19,7 @@ next-env.d.ts
 .env.local
 .env.*.local
 appsettings.Local.json
+local.settings.json
 *.pfx
 *.publishsettings
 
@@ -37,3 +38,9 @@ Thumbs.db
 
 # Bicep
 infra/main.json
+
+# SQL Server database backups
+*.bak
+
+# Local backup files
+*.backup

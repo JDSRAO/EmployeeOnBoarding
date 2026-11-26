@@ -1,0 +1,23 @@
+{
+  "version": "2.0",
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        "excludedTypes": "Request"
+      },
+      "enableLiveMetricsFilters": true
+    },
+    "logLevel": {
+      "default": "Information",
+      "EmployeeOnBoarding.Functions": "Information"
+    }
+  },
+  "extensions": {
+    "serviceBus": {
+      "maxConcurrentCalls": 2,
+      "autoCompleteMessages": true,
+      "maxAutoLockRenewalDuration": "00:05:00"
+    }
+  }
+}

@@ -14,7 +14,11 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Services(services)
     .Enrich.FromLogContext(), writeToProviders: true);
 
-builder.Services.AddApplicationInsightsTelemetry();
+if (!string.IsNullOrWhiteSpace(
+    builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+{
+    builder.Services.AddApplicationInsightsTelemetry();
+}
 
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails();
