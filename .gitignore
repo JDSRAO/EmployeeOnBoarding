@@ -38,3 +38,9 @@ Thumbs.db
 
 # Bicep
 infra/main.json
+
+# SQL Server database backups
+*.bak
+
+# Local backup files
+*.backup
