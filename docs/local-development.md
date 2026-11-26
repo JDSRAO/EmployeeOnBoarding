@@ -25,7 +25,7 @@ az account show
 ```powershell
 dotnet restore EmployeeOnBoarding.slnx
 dotnet build backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj
-dotnet build backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj
+dotnet build EmployeeOnBoarding.Functions/EmployeeOnBoarding.Functions.csproj
 dotnet build backend/database/EmployeeOnBoarding.Database/EmployeeOnBoarding.Database.sqlproj
 ```
 
@@ -39,7 +39,7 @@ cd ..
 
 ## 3. Configure .NET user secrets
 
-The API and worker share the user-secrets ID `employee-onboarding-local`. The helper script reads the secrets from Key Vault and writes them for both projects.
+The API uses .NET user secrets. The helper script also reads the Service Bus and storage settings from Key Vault and writes the Functions values into the ignored `EmployeeOnBoarding.Functions/local.settings.json` file.
 
 ```powershell
 .\scripts\set-local-secrets.ps1 -GrantKeyVaultAccess
@@ -51,9 +51,10 @@ The script sets:
 | --- | --- |
 | API | `ConnectionStrings:SqlDatabase` |
 | API | `ConnectionStrings:BlobStorage` |
-| API | `ServiceBus:ConnectionString` |
-| Worker | `ConnectionStrings:SqlDatabase` |
-| Worker | `ServiceBus:ConnectionString` |
+| Functions | `ConnectionStrings__SqlDatabase` |
+| Functions | `ServiceBusConnection` |
+| Functions | `ServiceBusQueueName` |
+| Functions | `AzureWebJobsStorage` |
 
 It also writes `frontend/.env.local` with:
 
@@ -77,9 +78,9 @@ Then set them:
 dotnet user-secrets set "ConnectionStrings:SqlDatabase" "<value>" --project backend/src/EmployeeOnBoarding.Api
 dotnet user-secrets set "ConnectionStrings:BlobStorage" "<value>" --project backend/src/EmployeeOnBoarding.Api
 dotnet user-secrets set "ServiceBus:ConnectionString" "<value>" --project backend/src/EmployeeOnBoarding.Api
-dotnet user-secrets set "ConnectionStrings:SqlDatabase" "<value>" --project backend/src/EmployeeOnBoarding.Worker
-dotnet user-secrets set "ServiceBus:ConnectionString" "<value>" --project backend/src/EmployeeOnBoarding.Worker
 ```
+
+Set `ConnectionStrings__SqlDatabase`, `ServiceBusConnection`, `ServiceBusQueueName`, and `AzureWebJobsStorage` in `EmployeeOnBoarding.Functions/local.settings.json` under `Values`. Keep the connection string values out of source control.
 
 Do not place these values in `appsettings.json` or commit them.
 
@@ -97,19 +98,20 @@ dotnet run --project backend/src/EmployeeOnBoarding.Api --launch-profile http
 - Swagger: `http://localhost:5215/swagger`
 - Health: `http://localhost:5215/health`
 
-### Worker
+### Functions listener
+
+Install Azure Functions Core Tools v4, then run:
 
 ```powershell
-dotnet run --project backend/src/EmployeeOnBoarding.Worker --launch-profile http
+cd EmployeeOnBoarding.Functions
+func start
 ```
 
-- Health: `http://localhost:5129/health`
-
-The worker connects to the deployed Service Bus queue and the deployed SQL database. If the API is running locally and the deployed worker is also running, both consumers will compete for messages. That is normal competing-consumer behavior, but it can make local demos confusing. Stop the deployed worker during local testing if you need every message processed locally:
+The function connects to the configured Service Bus queue and SQL database. If the deployed Function App is also running, both consumers compete for messages. Stop the deployed Function App during local testing if local processing should be isolated:
 
 ```powershell
-az webapp stop -g rg-employee-onboarding-dev -n <worker-app-name>
-az webapp start -g rg-employee-onboarding-dev -n <worker-app-name>
+az functionapp stop -g rg-employee-onboarding-dev -n <function-app-name>
+az functionapp start -g rg-employee-onboarding-dev -n <function-app-name>
 ```
 
 ### Frontend
@@ -138,8 +140,8 @@ The build writes the deployable static site to `frontend/out`. `npm run preview`
 2. Add an employee with a profile picture.
 3. Check the API Swagger response at `http://localhost:5215/swagger`.
 4. Check the employee list and image rendering.
-5. Open the Notifications page. The locally running worker should create the notification.
-6. Inspect the worker console for a successful structured log entry.
+5. Open the Notifications page. The locally running function should create the notification.
+6. Inspect the Functions host console for a successful structured log entry.
 7. Query SQL:
 
    ```sql
@@ -164,13 +166,14 @@ The build writes the deployable static site to `frontend/out`. `npm run preview`
 | `Cors:AllowedOrigins:0` | Static Web App origin | `appsettings.Development.json` |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Key Vault reference | Environment variable or `.env.local` for browser only |
 
-### Worker
+### Functions
 
 | Setting | Source in Azure | Local source |
 | --- | --- | --- |
-| `ConnectionStrings:SqlDatabase` | Key Vault reference | User secrets |
-| `ServiceBus:ConnectionString` | Key Vault reference | User secrets |
-| `ServiceBus:QueueName` | App setting | `appsettings.json` |
+| `ConnectionStrings__SqlDatabase` | Key Vault reference | `local.settings.json` |
+| `ServiceBusConnection` | Key Vault reference | `local.settings.json` |
+| `ServiceBusQueueName` | App setting | `local.settings.json` |
+| `AzureWebJobsStorage` | Storage connection string | `local.settings.json` |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Key Vault reference | Optional environment variable |
 
 ### Frontend
@@ -190,13 +193,13 @@ The build writes the deployable static site to `frontend/out`. `npm run preview`
 | API returns a SQL firewall error | The current public IP was not allowed. Re-run `deploy-infrastructure.ps1` or add a SQL firewall rule for your IP. |
 | CORS error from `localhost:3000` | Confirm you are running the API in the `Development` environment and that the origin is listed in `appsettings.Development.json`. |
 | Uploaded images do not display | Confirm the storage account allows public blob access and the `profile-pictures` container has public access level **Blob**. |
-| Notification does not appear | Confirm the worker process is running and the deployed worker is stopped if you expect local consumption. Check the worker console for deserialization or SQL errors. |
+| Notification does not appear | Confirm the Functions host is running and the deployed Function App is stopped if you expect local consumption. Check the host console for deserialization or SQL errors. |
 | Key Vault reads fail locally | The signed-in user needs `Key Vault Secrets User`. Run `set-local-secrets.ps1 -GrantKeyVaultAccess` and wait for propagation. |
 | Blob upload fails locally | The API uses the storage account key from Key Vault. Verify the `StorageConnectionString` secret and that the storage account firewall allows your network. |
 
 ## 8. Demo data reset
 
-Clear notifications and let the worker rebuild them by editing an employee:
+Clear notifications and let the Function rebuild them by editing an employee:
 
 ```sql
 DELETE FROM dbo.Notifications;

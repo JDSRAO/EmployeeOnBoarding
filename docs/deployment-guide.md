@@ -37,7 +37,7 @@ The naming uses `environmentName` and a deterministic eight-character suffix.
 | Resource group | user supplied | `rg-employee-onboarding-dev` |
 | App Service plan | `plan-eob-<env>-<suffix>` | `plan-eob-dev-a1b2c3d4` |
 | API App Service | `app-eob-api-<env>-<suffix>` | `app-eob-api-dev-a1b2c3d4` |
-| Worker App Service | `app-eob-worker-<env>-<suffix>` | `app-eob-worker-dev-a1b2c3d4` |
+| Function App | `app-eob-worker-<env>-<suffix>` | `app-eob-worker-dev-a1b2c3d4` |
 | Static Web App | `swa-eob-<env>-<suffix>` | `swa-eob-dev-a1b2c3d4` |
 | SQL server | `sql-eob-<env>-<suffix>` | `sql-eob-dev-a1b2c3d4` |
 | SQL database | fixed | `EmployeeOnBoarding` |
@@ -115,16 +115,16 @@ Then follow [local-development.md](local-development.md). The `-GrantKeyVaultAcc
 
 ### 3.6 Use the deployed apps
 
-The API and worker are deployed by CI/CD, not by the infrastructure script. The infrastructure deployment creates empty App Services. To publish code manually:
+The API and Function App are deployed by CI/CD, not by the infrastructure script. The infrastructure deployment creates the host resources. To publish code manually:
 
 ```powershell
 dotnet publish backend/src/EmployeeOnBoarding.Api/EmployeeOnBoarding.Api.csproj -c Release -o publish/api
-dotnet publish backend/src/EmployeeOnBoarding.Worker/EmployeeOnBoarding.Worker.csproj -c Release -o publish/worker
+dotnet publish EmployeeOnBoarding.Functions/EmployeeOnBoarding.Functions.csproj -c Release -o publish/functions
 Compress-Archive -Path publish/api/* -DestinationPath publish/api.zip -Force
-Compress-Archive -Path publish/worker/* -DestinationPath publish/worker.zip -Force
+Compress-Archive -Path publish/functions/* -DestinationPath publish/functions.zip -Force
 
 az webapp deploy -g rg-employee-onboarding-dev -n <api-app-name> --src-path publish/api.zip --type zip
-az webapp deploy -g rg-employee-onboarding-dev -n <worker-app-name> --src-path publish/worker.zip --type zip
+az functionapp deployment source config-zip -g rg-employee-onboarding-dev -n <function-app-name> --src publish/functions.zip
 ```
 
 For the frontend, use one of the CI/CD pipelines or the Static Web Apps deployment token described below.
@@ -194,11 +194,11 @@ Push to `main` or run **Actions → Employee Onboarding → Run workflow**.
 
 The workflow:
 
-1. Builds the API, worker, SQL project and frontend.
+1. Builds the API, Functions app, SQL project and frontend.
 2. Deploys Bicep.
 3. Adds the GitHub runner IP to the SQL firewall.
 4. Publishes the dacpac.
-5. Deploys the API and worker zips.
+5. Deploys the API and Functions app packages.
 6. Calls the API health endpoint and reads the employee list to verify SQL and Key Vault access.
 7. Removes the temporary SQL firewall rule.
 8. Builds the Next.js static export into `out` and deploys it to Static Web Apps with the API URL baked into the build.
@@ -275,7 +275,7 @@ Then validate the asynchronous flow in the UI:
 
 7. In the storage account, open **Containers → profile-pictures** and confirm the uploaded blob exists.
 8. In Service Bus, confirm the `employee-events` queue has no active or dead-letter messages.
-9. In Application Insights, open **Transaction search** and find the API request, Blob dependency, SQL dependency and worker trace.
+9. In Application Insights, open **Transaction search** and find the API request, Blob dependency, SQL dependency and Function trace.
 
 ## 7. Troubleshooting
 
@@ -285,7 +285,7 @@ Then validate the asynchronous flow in the UI:
 | API starts but SQL login fails | Password mismatch or firewall. Re-check `SqlConnectionString` in Key Vault, confirm the SQL firewall includes the caller, and re-run the deployment with the same password. |
 | Browser shows a CORS error | The API's `Cors__AllowedOrigins__0` is the Static Web App hostname. If you added a custom domain, add another allowed origin and restart the API. |
 | Images return 404/403 | Confirm the `profile-pictures` container exists and public blob access is enabled. The sample uses public read access for teaching. |
-| Notifications never appear | Check worker logs (`az webapp log tail`), the queue's active and dead-letter counts, and the SQL `Notifications` table. A malformed event can end up in the dead-letter queue after five attempts. |
+| Notifications never appear | Check Function App logs, the queue's active and dead-letter counts, and the SQL `Notifications` table. A malformed event can end up in the dead-letter queue after five attempts. |
 | Database pipeline step cannot connect | The GitHub/ADO runner IP was not added to the SQL firewall, or the password contains a semicolon that broke the connection string. Avoid semicolons in the sample password. |
 | Static Web Apps deployment fails | Confirm the deployment token was retrieved successfully, the frontend static export produced `frontend/out/index.html`, and the Node version is 22 or later. Check the build log for `next build` errors. |
 | .NET 10 runtime not available | Choose a region where App Service supports the .NET 10 Linux runtime, or update `apiLinuxFxVersion`/`workerLinuxFxVersion` after confirming the supported string in the portal. |
